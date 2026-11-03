@@ -96,7 +96,7 @@ class TestCatalogoYMatching(unittest.TestCase):
         self.assertEqual(res['criterio'], 'Sin coincidencia')
 
     def test_enriquecer_reporte_excel(self):
-        ruta_origen = os.path.join(os.path.dirname(__file__), 'mock_procesos.xls')
+        ruta_origen = os.path.join(os.path.dirname(__file__), 'mock_procesos.xlsx')
         
         # Crear un DataFrame mock simulando la salida de COMPR.AR
         df_procesos = pd.DataFrame([
@@ -107,7 +107,7 @@ class TestCatalogoYMatching(unittest.TestCase):
                 'Unidad Ejecutora': 'Facultad Regional Concepción del Uruguay',
             }
         ])
-        df_procesos.to_excel(ruta_origen, index=False)
+        df_procesos.to_excel(ruta_origen, index=False, engine='openpyxl')
 
         items_mock = {
             '38-0001-LPU26': [
