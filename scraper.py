@@ -1,16 +1,21 @@
 import os
 import re
+import threading
 
 import pandas as pd
 import rpa as r
 
-from config import RESULTADOS_DIR
+from config import RESULTADOS_DIR, MAX_PROCESOS_INSPECCION
 from rubros import RUBROS
 from opciones import TIPO_PROCESO, ESTADO_PROCESO, TIPO_OPERACION
 # --- NUEVO ---
 import html
 import httpx
 from catalogo import enriquecer_reporte_excel, limpiar_texto_markdown
+
+# Lock global para asegurar que sólo una instancia de TagUI / Chrome
+# interactúe con el navegador a la vez y evitar colisiones de sesión.
+TAGUI_LOCK = threading.Lock()
 # --- FIN NUEVO ---
 
 # nombre con el que comprar.gob.ar siempre nombra la descarga del reporte
@@ -81,92 +86,99 @@ def buscar_procesos_de_un_rubro(fecha_desde: str, fecha_hasta: str, rubro: str, 
     fecha de apertura, y descarga el reporte Excel de resultados
     dentro del repositorio.
     """
-    r.init()
-    if archivo_salida is None:
-        rubro_nombre = re.sub(r'[^A-Za-z0-9]+', '_', rubro).strip('_').lower()
-        desde_nombre = fecha_desde.replace('/', '-')
-        hasta_nombre = fecha_hasta.replace('/', '-')
-        archivo_salida = os.path.join(
-            RESULTADOS_DIR, f'procesos_{rubro_nombre}_{desde_nombre}_{hasta_nombre}.xls'
-        )
+    with TAGUI_LOCK:
+        r.init()
+        try:
+            if archivo_salida is None:
+                rubro_nombre = re.sub(r'[^A-Za-z0-9]+', '_', rubro).strip('_').lower()
+                desde_nombre = fecha_desde.replace('/', '-')
+                hasta_nombre = fecha_hasta.replace('/', '-')
+                archivo_salida = os.path.join(
+                    RESULTADOS_DIR, f'procesos_{rubro_nombre}_{desde_nombre}_{hasta_nombre}.xls'
+                )
 
-    carpeta_salida = os.path.dirname(archivo_salida)
-    os.makedirs(carpeta_salida, exist_ok=True)
+            carpeta_salida = os.path.dirname(archivo_salida)
+            os.makedirs(carpeta_salida, exist_ok=True)
 
-    # las descargas del navegador van a esta carpeta con el nombre fijo
-    # que usa el sitio; si ya existe de una corrida anterior, se borra
-    # para no terminar con "ReporteProcesos (1).xls"
-    descarga_previa = os.path.join(carpeta_salida, NOMBRE_DESCARGA)
-    if os.path.exists(descarga_previa):
-        os.remove(descarga_previa)
-    r.download_location(carpeta_salida)
+            # las descargas del navegador van a esta carpeta con el nombre fijo
+            # que usa el sitio; si ya existe de una corrida anterior, se borra
+            # para no terminar con "ReporteProcesos (1).xls"
+            descarga_previa = os.path.join(carpeta_salida, NOMBRE_DESCARGA)
+            if os.path.exists(descarga_previa):
+                os.remove(descarga_previa)
+            r.download_location(carpeta_salida)
 
-    r.url('https://comprar.gob.ar/BuscarAvanzado.aspx')
-    r.wait()  # ensure the search form is fully loaded
+            r.url('https://comprar.gob.ar/BuscarAvanzado.aspx')
+            r.wait()  # ensure the search form is fully loaded
 
-    r.select('#ctl00_CPH1_ddlRubro', RUBROS[rubro])
-    
-    if tipo_proceso and tipo_proceso != 'Cualquiera':
-        r.select('#ctl00_CPH1_ddlTipoProceso', TIPO_PROCESO[tipo_proceso])
-    
-    if estado_proceso and estado_proceso != 'Cualquiera':
-        r.select('#ctl00_CPH1_ddlEstadoProceso', ESTADO_PROCESO[estado_proceso])
-        
-    if tipo_operacion and tipo_operacion != 'Cualquiera':
-        r.select('#ctl00_CPH1_ddlTipoOperacion', TIPO_OPERACION[tipo_operacion])
+            r.select('#ctl00_CPH1_ddlRubro', RUBROS[rubro])
+            
+            if tipo_proceso and tipo_proceso != 'Cualquiera':
+                r.select('#ctl00_CPH1_ddlTipoProceso', TIPO_PROCESO[tipo_proceso])
+            
+            if estado_proceso and estado_proceso != 'Cualquiera':
+                r.select('#ctl00_CPH1_ddlEstadoProceso', ESTADO_PROCESO[estado_proceso])
+                
+            if tipo_operacion and tipo_operacion != 'Cualquiera':
+                r.select('#ctl00_CPH1_ddlTipoOperacion', TIPO_OPERACION[tipo_operacion])
 
-    r.type('#ctl00_CPH1_devDteEdtFechaAperturaDesde_I', '[clear]' + fecha_desde)
-    r.type('#ctl00_CPH1_devDteEdtFechaAperturaHasta_I', '[clear]' + fecha_hasta)
-    r.select('#ctl00_CPH1_ddlResultadoOrdenadoPor', 'PLI.PliegoCronograma.FechaActoApertura')
+            r.type('#ctl00_CPH1_devDteEdtFechaAperturaDesde_I', '[clear]' + fecha_desde)
+            r.type('#ctl00_CPH1_devDteEdtFechaAperturaHasta_I', '[clear]' + fecha_hasta)
+            r.select('#ctl00_CPH1_ddlResultadoOrdenadoPor', 'PLI.PliegoCronograma.FechaActoApertura')
 
-    r.click('#ctl00_CPH1_btnListarPliegoAvanzado')
+            r.click('#ctl00_CPH1_btnListarPliegoAvanzado')
 
-    # el postback de ASP.NET es asincrono: esperar a que termine y aparezca
-    # el botón de descarga. Ojo: la grilla de resultados (GridListaPliegos)
-    # tiene celdas <td> incluso cuando no hay resultados (muestra un
-    # mensaje de "no se encontraron registros" dentro de un <td>), así que
-    # no sirve como indicador; el botón de descarga sí es un indicador
-    # confiable porque el sitio sólo lo renderiza si hay filas con datos.
-    #
-    # cada r.count() implica un ida y vuelta real con el proceso de TagUI
-    # (~1.5-2s), aparte del propio r.wait(); por eso se usan pocos intentos
-    # en vez de sondear segundo a segundo, que en la práctica tardaba casi
-    # un minuto para confirmar que no había resultados
-    boton_descarga_presente = r.count('#ctl00_CPH1_btnDescargarReporteExcel') > 0
-    intentos_restantes = 6
-    while not boton_descarga_presente and intentos_restantes > 0:
-        r.wait(1.5)
-        boton_descarga_presente = r.count('#ctl00_CPH1_btnDescargarReporteExcel') > 0
-        intentos_restantes -= 1
+            # el postback de ASP.NET es asincrono: esperar a que termine y aparezca
+            # el botón de descarga. Ojo: la grilla de resultados (GridListaPliegos)
+            # tiene celdas <td> incluso cuando no hay resultados (muestra un
+            # mensaje de "no se encontraron registros" dentro de un <td>), así que
+            # no sirve como indicador; el botón de descarga sí es un indicador
+            # confiable porque el sitio sólo lo renderiza si hay filas con datos.
+            #
+            # cada r.count() implica un ida y vuelta real con el proceso de TagUI
+            # (~1.5-2s), aparte del propio r.wait(); por eso se usan pocos intentos
+            # en vez de sondear segundo a segundo, que en la práctica tardaba casi
+            # un minuto para confirmar que no había resultados
+            boton_descarga_presente = r.count('#ctl00_CPH1_btnDescargarReporteExcel') > 0
+            intentos_restantes = 6
+            while not boton_descarga_presente and intentos_restantes > 0:
+                r.wait(1.5)
+                boton_descarga_presente = r.count('#ctl00_CPH1_btnDescargarReporteExcel') > 0
+                intentos_restantes -= 1
 
-    # si el botón de descarga nunca apareció, el sitio no encontró
-    # procesos para esos filtros: cortamos acá en lugar de clickear un
-    # elemento inexistente, que dejaría a TagUI reintentando
-    # indefinidamente y al bot "trabado"
-    if not boton_descarga_presente:
-        r.close()
-        raise SinResultadosError(
-            f'No se encontraron procesos de "{rubro}" entre {fecha_desde} y {fecha_hasta}'
-        )
+            # si el botón de descarga nunca apareció, el sitio no encontró
+            # procesos para esos filtros: cortamos acá en lugar de clickear un
+            # elemento inexistente, que dejaría a TagUI reintentando
+            # indefinidamente y al bot "trabado"
+            if not boton_descarga_presente:
+                raise SinResultadosError(
+                    f'No se encontraron procesos de "{rubro}" entre {fecha_desde} y {fecha_hasta}'
+                )
 
-    r.click('#ctl00_CPH1_btnDescargarReporteExcel')
+            r.click('#ctl00_CPH1_btnDescargarReporteExcel')
 
-    # esperar a que el archivo se termine de descargar
-    segundos_esperados = 0
-    while not os.path.isfile(descarga_previa) and segundos_esperados < 20:
-        r.wait(1)
-        segundos_esperados += 1
+            # esperar a que el archivo se termine de descargar
+            segundos_esperados = 0
+            while not os.path.isfile(descarga_previa) and segundos_esperados < 20:
+                r.wait(1)
+                segundos_esperados += 1
 
-    os.replace(descarga_previa, archivo_salida)
-    # --- NUEVO ---
-    try:
-        items_por_proceso = recolectar_items_de_procesos_en_sesion(archivo_salida, max_procesos=5)
-        archivo_salida, _ = enriquecer_reporte_excel(archivo_salida, items_por_proceso)
-    except Exception as e:
-        print(f"Advertencia: no se pudieron recolectar/cruzar ítems adicionales ({e})")
-    # --- FIN NUEVO ---
-    r.close()
-    return archivo_salida
+            os.replace(descarga_previa, archivo_salida)
+            # --- NUEVO ---
+            try:
+                items_por_proceso = recolectar_items_de_procesos_en_sesion(
+                    archivo_salida, max_procesos=MAX_PROCESOS_INSPECCION
+                )
+                archivo_salida, _ = enriquecer_reporte_excel(archivo_salida, items_por_proceso)
+            except Exception as e:
+                print(f"Advertencia: no se pudieron recolectar/cruzar ítems adicionales ({e})")
+            # --- FIN NUEVO ---
+            return archivo_salida
+        finally:
+            try:
+                r.close()
+            except Exception:
+                pass
 
 
 # --- NUEVO ---
@@ -272,8 +284,16 @@ def obtener_items_proceso_http(num_proc: str) -> list:
     Obtiene rápidamente los ítems de un proceso puntual navegando el flujo
     de BuscarAvanzado.aspx -> VistaPreviaPliegoCiudadano.aspx mediante httpx.
     """
+    headers = {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'es-AR,es;q=0.9,en;q=0.8',
+    }
     try:
-        with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+        with httpx.Client(timeout=15.0, follow_redirects=True, headers=headers) as client:
             r1 = client.get('https://comprar.gob.ar/BuscarAvanzado.aspx')
             if r1.status_code != 200:
                 return []
@@ -292,7 +312,10 @@ def obtener_items_proceso_http(num_proc: str) -> list:
                 '__EVENTVALIDATION': extraer_campo(r1.text, '__EVENTVALIDATION'),
                 'ctl00$CPH1$txtNumeroProceso': num_proc,
             }
-            r2 = client.post(str(r1.url), data=data1)
+            headers_post = headers.copy()
+            headers_post['Referer'] = 'https://comprar.gob.ar/BuscarAvanzado.aspx'
+            headers_post['Origin'] = 'https://comprar.gob.ar'
+            r2 = client.post('https://comprar.gob.ar/BuscarAvanzado.aspx', data=data1, headers=headers_post)
             if r2.status_code != 200 or 'ctl00_CPH1_GridListaPliegos_ctl02_lnkNumeroProceso' not in r2.text:
                 return []
 
@@ -303,7 +326,10 @@ def obtener_items_proceso_http(num_proc: str) -> list:
                 '__VIEWSTATEGENERATOR': extraer_campo(r2.text, '__VIEWSTATEGENERATOR'),
                 '__EVENTVALIDATION': extraer_campo(r2.text, '__EVENTVALIDATION'),
             }
-            r3 = client.post(str(r2.url), data=data2)
+            headers_post2 = headers.copy()
+            headers_post2['Referer'] = str(r2.url)
+            headers_post2['Origin'] = 'https://comprar.gob.ar'
+            r3 = client.post(str(r2.url), data=data2, headers=headers_post2)
             if r3.status_code == 200 and 'gvLineaPliego' in r3.text:
                 return parsear_items_html_pliego(r3.text)[:25]
     except Exception as e:
@@ -311,12 +337,15 @@ def obtener_items_proceso_http(num_proc: str) -> list:
     return []
 
 
-def recolectar_items_de_procesos_en_sesion(archivo_xls: str, max_procesos: int = 5) -> dict:
+def recolectar_items_de_procesos_en_sesion(archivo_xls: str, max_procesos: int = None) -> dict:
     """
     Con la sesión de TagUI activa tras listar procesos en BuscarAvanzado.aspx,
     recolecta los ítems (renglón, código, descripción, cantidad y unidad) de los
     primeros `max_procesos` procesos del reporte.
     """
+    if max_procesos is None:
+        max_procesos = MAX_PROCESOS_INSPECCION
+
     items_por_proceso = {}
     try:
         df = pd.read_excel(archivo_xls)
@@ -399,65 +428,75 @@ def parsear_grilla_items_ciudadano(html_grilla: str, max_resultados: int = 10) -
 def buscar_items_ciudadano(termino: str, por_codigo: bool = False, max_resultados: int = 10) -> list:
     """
     Busca ítems en el portal https://comprar.gob.ar/Item/Item/BuscarItemCiudadano
-    por código de ítem o por descripción utilizando RPA (con fallback al endpoint
-    de grilla de BuscarItemCiudadano) y devuelve una lista de diccionarios con:
-    codigo, rubro, clase, descripcion, estado.
+    por código de ítem o por descripción.
+    Prioriza la consulta directa vía HTTP (_GrillaItems) que responde en milisegundos
+    sin bloquear el navegador TagUI, y cae a RPA únicamente como respaldo.
     """
     resultados = []
     termino_limpio = str(termino or '').strip()
     if not termino_limpio:
         return resultados
 
-    # Intentar primero vía RPA sobre BuscarItemCiudadano
+    # 1. Prioridad: Consulta directa HTTP al endpoint AJAX _GrillaItems
+    # Es instantánea (~200ms) y no compite por el recurso de TagUI/Chrome
     try:
-        r.init()
-        r.url('https://comprar.gob.ar/Item/Item/BuscarItemCiudadano')
-        r.wait(1.5)
-
-        if por_codigo:
-            r.type('//input[@name="CodigoItem"]', '[clear]' + termino_limpio)
-            r.click('//button[@name="esBusquedaRapida"]')
-        else:
-            r.type('//input[@name="Descripcion"]', '[clear]' + termino_limpio)
-            r.click('//button[@name="esBusquedaAvanzada" and @value="true"]')
-
-        xpath_filas = '//div[@id="divResultados"]//table//tbody/tr[td]'
-        intentos = 5
-        while r.count(xpath_filas) == 0 and intentos > 0:
-            r.wait(1.5)
-            intentos -= 1
-
-        if r.count(xpath_filas) > 0:
-            html_div = r.dom('return document.getElementById("divResultados").innerHTML')
-            resultados = parsear_grilla_items_ciudadano(str(html_div), max_resultados)
-
-        r.close()
-        if resultados:
-            return resultados
-    except Exception as e:
-        print(f"Aviso en RPA BuscarItemCiudadano ({e}), usando consulta directa a _GrillaItems.")
-        try:
-            r.close()
-        except Exception:
-            pass
-
-    # Fallback directo al endpoint AJAX de BuscarItemCiudadano (/Item/Item/_GrillaItems)
-    try:
+        headers = {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            ),
+            'Accept': 'text/html, */*; q=0.01',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': 'https://comprar.gob.ar/Item/Item/BuscarItemCiudadano',
+        }
         params = (
             {'CodigoItem': termino_limpio, 'esBusquedaRapida': 'true'}
             if por_codigo
             else {'Descripcion': termino_limpio, 'esBusquedaAvanzada': 'true'}
         )
-        resp = httpx.get(
-            'https://comprar.gob.ar/Item/Item/_GrillaItems',
-            params=params,
-            timeout=15.0,
-            follow_redirects=True,
-        )
-        if resp.status_code == 200:
-            resultados = parsear_grilla_items_ciudadano(resp.text, max_resultados)
+        with httpx.Client(timeout=12.0, follow_redirects=True, headers=headers) as client:
+            resp = client.get(
+                'https://comprar.gob.ar/Item/Item/_GrillaItems',
+                params=params,
+            )
+            if resp.status_code == 200 and 'divResultados' in resp.text:
+                resultados = parsear_grilla_items_ciudadano(resp.text, max_resultados)
+                if resultados:
+                    return resultados
     except Exception as e:
-        print(f"Error consultando _GrillaItems: {e}")
+        print(f"Aviso en consulta HTTP rápida de _GrillaItems ({e}). Reintentando por RPA...")
+
+    # 2. Respaldo vía TagUI / RPA (protegido con Lock para evitar colisiones)
+    try:
+        with TAGUI_LOCK:
+            r.init()
+            try:
+                r.url('https://comprar.gob.ar/Item/Item/BuscarItemCiudadano')
+                r.wait(1.5)
+
+                if por_codigo:
+                    r.type('//input[@name="CodigoItem"]', '[clear]' + termino_limpio)
+                    r.click('//button[@name="esBusquedaRapida"]')
+                else:
+                    r.type('//input[@name="Descripcion"]', '[clear]' + termino_limpio)
+                    r.click('//button[@name="esBusquedaAvanzada" and @value="true"]')
+
+                xpath_filas = '//div[@id="divResultados"]//table//tbody/tr[td]'
+                intentos = 5
+                while r.count(xpath_filas) == 0 and intentos > 0:
+                    r.wait(1.5)
+                    intentos -= 1
+
+                if r.count(xpath_filas) > 0:
+                    html_div = r.dom('return document.getElementById("divResultados").innerHTML')
+                    resultados = parsear_grilla_items_ciudadano(str(html_div), max_resultados)
+            finally:
+                try:
+                    r.close()
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"Error en fallback RPA BuscarItemCiudadano: {e}")
 
     return resultados
 # --- FIN NUEVO ---
