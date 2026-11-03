@@ -1,19 +1,39 @@
 import json
 import os
+import tempfile
+import threading
 import pandas as pd
 from typing import List, Dict
 
 from config import ALERTAS_PATH, VISTOS_PATH
 
+_IO_LOCK = threading.Lock()
+
+
+def _guardar_json_atomico(ruta_archivo: str, datos: dict):
+    """Guarda un diccionario como JSON de forma atómica y thread-safe."""
+    with _IO_LOCK:
+        dir_name = os.path.dirname(ruta_archivo) or '.'
+        os.makedirs(dir_name, exist_ok=True)
+        with tempfile.NamedTemporaryFile('w', dir=dir_name, delete=False, encoding='utf-8') as tf:
+            json.dump(datos, tf, ensure_ascii=False, indent=2)
+            temp_name = tf.name
+        os.replace(temp_name, ruta_archivo)
+
+
 def cargar_alertas() -> dict:
-    if not os.path.isfile(ALERTAS_PATH):
-        return {}
-    with open(ALERTAS_PATH, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    with _IO_LOCK:
+        if not os.path.isfile(ALERTAS_PATH):
+            return {}
+        try:
+            with open(ALERTAS_PATH, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
 
 def guardar_alertas(alertas: dict):
-    with open(ALERTAS_PATH, 'w', encoding='utf-8') as f:
-        json.dump(alertas, f, ensure_ascii=False, indent=2)
+    _guardar_json_atomico(ALERTAS_PATH, alertas)
 
 def obtener_alertas(chat_id: int) -> dict:
     alertas = cargar_alertas()
@@ -52,14 +72,18 @@ def eliminar_alerta(chat_id: int, nombre_alerta: str) -> bool:
     return False
 
 def cargar_vistos() -> dict:
-    if not os.path.isfile(VISTOS_PATH):
-        return {}
-    with open(VISTOS_PATH, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    with _IO_LOCK:
+        if not os.path.isfile(VISTOS_PATH):
+            return {}
+        try:
+            with open(VISTOS_PATH, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
 
 def guardar_vistos(vistos: dict):
-    with open(VISTOS_PATH, 'w', encoding='utf-8') as f:
-        json.dump(vistos, f, ensure_ascii=False, indent=2)
+    _guardar_json_atomico(VISTOS_PATH, vistos)
 
 def obtener_ids_nuevos(chat_id: int, nombre_alerta: str, ids_encontrados: List[str]) -> List[str]:
     vistos = cargar_vistos()

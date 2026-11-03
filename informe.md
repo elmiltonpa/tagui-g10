@@ -80,3 +80,19 @@ Todos los cambios pueden buscarse en el editor filtrando por el texto `# --- NUE
 | `bot.py` | Modificado | Registro del comando `/catalogo`, nuevos estados del `ConversationHandler` e inicialización del catálogo al arrancar. |
 | `config.py` | Modificado | Constante `CATALOGO_PATH` (`catalogo_empresa.xlsx`). |
 | `requirements.txt` | Modificado | Agregada la librería `openpyxl==3.1.5` para soporte de archivos `.xlsx`. |
+
+---
+
+## ⚡ Optimizaciones y Estabilización Técnica
+
+1. **Sincronización y Concurrencia (`TAGUI_LOCK`):**
+   - Se incorporó un lock global sobre el motor de TagUI para serializar el acceso a Chrome. Si una alerta periódica y una búsqueda manual coinciden en el tiempo, una espera a la otra en cola en vez de generar un conflicto de procesos o caída de Chrome.
+   - En Telegram, el bot le informa al usuario si el navegador está ocupado y pone su consulta en espera automáticamente.
+2. **Escrituras Atómicas y Thread-Safety:**
+   - La persistencia de alertas, presets y catálogo ahora utiliza guardado atómico (escritura en archivo temporal + `os.replace`) protegido por mutex. Esto previene corrupción de archivos JSON o Excel por lecturas/escrituras simultáneas.
+3. **Consulta Rápida HTTP-First en Catálogo (`_GrillaItems`):**
+   - La búsqueda ciudadana (`/catalogo` $\rightarrow$ Buscar en COMPR.AR) ahora consulta primero el endpoint AJAX oficial vía `httpx` con headers de navegador. Responde en ~200ms sin necesidad de abrir ni bloquear el navegador TagUI, usando RPA únicamente como respaldo.
+4. **Inspección Profunda Configurable:**
+   - Se añadió `MAX_PROCESOS_INSPECCION` en `config.py` (por defecto 10, configurable vía `.env`), permitiendo inspeccionar más procesos sin tiempos muertos gracias a la aceleración HTTP.
+5. **Resiliencia en Mensajería Telegram:**
+   - Se agregaron capturas de `BadRequest` en el envío de mensajes con formato Markdown y reportes adjuntos para garantizar que caracteres especiales en nombres de contrataciones públicas nunca interrumpan el flujo del bot.

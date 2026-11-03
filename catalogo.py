@@ -2,6 +2,8 @@
 import difflib
 import os
 import re
+import tempfile
+import threading
 import unicodedata
 import shutil
 from typing import Dict, List, Tuple
@@ -10,6 +12,7 @@ import pandas as pd
 
 from config import CATALOGO_PATH, RESULTADOS_DIR
 
+_CATALOGO_LOCK = threading.Lock()
 CATALOGO_BACKUP_PATH = os.path.join(RESULTADOS_DIR, 'catalogo_empresa.xlsx')
 
 COLUMNAS_CATALOGO = ['Codigo', 'Descripcion', 'Palabras_Clave', 'Rubro']
@@ -139,17 +142,30 @@ def cargar_catalogo() -> pd.DataFrame:
 
 
 def guardar_catalogo(df: pd.DataFrame):
-    """Guarda el DataFrame del catálogo en catalogo_empresa.xlsx y sincroniza copia en resultados/."""
-    for col in COLUMNAS_CATALOGO:
-        if col not in df.columns:
-            df[col] = ''
-    df = df[COLUMNAS_CATALOGO].fillna('')
-    df.to_excel(CATALOGO_PATH, index=False, engine='openpyxl')
-    try:
-        os.makedirs(RESULTADOS_DIR, exist_ok=True)
-        shutil.copy2(CATALOGO_PATH, CATALOGO_BACKUP_PATH)
-    except Exception:
-        pass
+    """Guarda el DataFrame del catálogo en catalogo_empresa.xlsx de forma atómica y sincroniza copia en resultados/."""
+    with _CATALOGO_LOCK:
+        for col in COLUMNAS_CATALOGO:
+            if col not in df.columns:
+                df[col] = ''
+        df = df[COLUMNAS_CATALOGO].fillna('')
+
+        dir_name = os.path.dirname(CATALOGO_PATH) or '.'
+        with tempfile.NamedTemporaryFile('wb', dir=dir_name, suffix='.xlsx', delete=False) as tf:
+            temp_path = tf.name
+        
+        try:
+            df.to_excel(temp_path, index=False, engine='openpyxl')
+            os.replace(temp_path, CATALOGO_PATH)
+        except Exception:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
+
+        try:
+            os.makedirs(RESULTADOS_DIR, exist_ok=True)
+            shutil.copy2(CATALOGO_PATH, CATALOGO_BACKUP_PATH)
+        except Exception:
+            pass
 
 
 def agregar_item_catalogo(codigo: str, descripcion: str, palabras_clave: str = '', rubro: str = '') -> bool:
