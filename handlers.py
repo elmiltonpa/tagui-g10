@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 from configuraciones import guardar_preset, obtener_presets, obtener_preset_por_nombre, eliminar_preset
 from alertas import guardar_alerta, obtener_alertas, eliminar_alerta
-from scraper import SinResultadosError, buscar_procesos_de_un_rubro, extraer_ultimas_licitaciones, TAGUI_LOCK
+from scraper import SinResultadosError, buscar_procesos_de_un_rubro, extraer_ultimas_licitaciones
 from teclados import (
     PERIODO_PERSONALIZADO, PERIODOS, teclado_periodos, teclado_rubros, 
     teclado_tipo_proceso, teclado_estado_proceso, teclado_tipo_operacion,
@@ -28,7 +28,7 @@ from catalogo import (
     formatear_catalogo_texto,
     limpiar_texto_markdown,
 )
-from scraper import buscar_items_ciudadano
+from scraper import buscar_items_ciudadano, TAGUI_LOCK
 from teclados import (
     teclado_prioridad_alerta,
     teclado_menu_catalogo,
@@ -63,11 +63,13 @@ async def ejecutar_busqueda(
     descripcion_periodo: str,
 ):
 
+    # --- NUEVO ---
     if TAGUI_LOCK.locked():
         await context.bot.send_message(
             chat_id,
             '⏳ El navegador de búsqueda está ocupado con otra solicitud o revisión de alertas. Tu consulta ingresó a la cola y comenzará en instantes...',
         )
+    # --- FIN NUEVO ---
 
     await context.bot.send_message(
         chat_id,
@@ -100,10 +102,12 @@ async def ejecutar_busqueda(
     # Si se seleccionó "Últimas 5", enviamos el texto extraído
     if periodo == 'ultimas_5':
         mensaje_licitaciones = extraer_ultimas_licitaciones(archivo, 5)
+        # --- NUEVO ---
         try:
             await context.bot.send_message(chat_id, text=mensaje_licitaciones, parse_mode='Markdown')
         except BadRequest:
             await context.bot.send_message(chat_id, text=mensaje_licitaciones)
+        # --- FIN NUEVO ---
 
     # --- NUEVO ---
     resumen_match = obtener_resumen_coincidencias_excel(archivo)
@@ -563,6 +567,7 @@ async def tarea_revisar_alertas(context: ContextTypes.DEFAULT_TYPE):
                     texto += "Adjunto el reporte actualizado:"
                     
                     with open(archivo, 'rb') as reporte:
+                        # --- NUEVO ---
                         try:
                             await context.bot.send_document(
                                 chat_id=chat_id, 
@@ -576,6 +581,7 @@ async def tarea_revisar_alertas(context: ContextTypes.DEFAULT_TYPE):
                                 document=reporte,
                                 caption=texto
                             )
+                        # --- FIN NUEVO ---
                     
                     # Guardamos los nuevos como vistos
                     marcar_como_vistos(chat_id, nombre_alerta, ids_nuevos)

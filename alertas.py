@@ -1,12 +1,15 @@
 import json
 import os
+# --- NUEVO ---
 import tempfile
 import threading
+# --- FIN NUEVO ---
 import pandas as pd
 from typing import List, Dict
 
 from config import ALERTAS_PATH, VISTOS_PATH
 
+# --- NUEVO ---
 _IO_LOCK = threading.Lock()
 
 
@@ -19,6 +22,7 @@ def _guardar_json_atomico(ruta_archivo: str, datos: dict):
             json.dump(datos, tf, ensure_ascii=False, indent=2)
             temp_name = tf.name
         os.replace(temp_name, ruta_archivo)
+# --- FIN NUEVO ---
 
 
 def cargar_alertas() -> dict:

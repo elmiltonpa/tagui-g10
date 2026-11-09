@@ -1,16 +1,17 @@
 import os
 import re
-import threading
 
 import pandas as pd
 import rpa as r
 
-from config import RESULTADOS_DIR, MAX_PROCESOS_INSPECCION
+from config import RESULTADOS_DIR
 from rubros import RUBROS
 from opciones import TIPO_PROCESO, ESTADO_PROCESO, TIPO_OPERACION
 # --- NUEVO ---
 import html
+import threading
 import httpx
+from config import MAX_PROCESOS_INSPECCION
 from catalogo import enriquecer_reporte_excel, limpiar_texto_markdown
 
 # Lock global para asegurar que sólo una instancia de TagUI / Chrome
@@ -86,7 +87,9 @@ def buscar_procesos_de_un_rubro(fecha_desde: str, fecha_hasta: str, rubro: str, 
     fecha de apertura, y descarga el reporte Excel de resultados
     dentro del repositorio.
     """
+    # --- NUEVO ---
     with TAGUI_LOCK:
+    # --- FIN NUEVO ---
         r.init()
         try:
             if archivo_salida is None:
@@ -175,10 +178,12 @@ def buscar_procesos_de_un_rubro(fecha_desde: str, fecha_hasta: str, rubro: str, 
             # --- FIN NUEVO ---
             return archivo_salida
         finally:
+            # --- NUEVO ---
             try:
                 r.close()
             except Exception:
                 pass
+            # --- FIN NUEVO ---
 
 
 # --- NUEVO ---
